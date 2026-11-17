@@ -35,6 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     io.add_argument("--output", "-o", type=Path, default=Path("output"), help="Output directory")
     io.add_argument("--max-side", type=int, default=1400, help="Maximum processing size; 0 disables resizing")
     io.add_argument("--preview", action=argparse.BooleanOptionalAction, default=True, help="Charcoal-background preview")
+    io.add_argument("--export-transparent", action=argparse.BooleanOptionalAction, default=True,
+                    help="Export transparent PNG (also accepts the older v7 command)")
     io.add_argument("--debug", action="store_true", help="Save segmentation and tonal debug images")
 
     seg = p.add_argument_group("Segmentation")
@@ -416,21 +418,25 @@ def process(path: Path, ns: argparse.Namespace) -> dict:
     art, mask = render_artwork(image, ns)
     ns.output.mkdir(parents=True, exist_ok=True)
     svg_path = ns.output / f"{path.stem}.svg"
-    png_path = ns.output / f"{path.stem}_transparent.png"
+    png_path = ns.output / f"{path.stem}_art_transparent.png"
     export_svg(svg_path, art, ns)
     rgba = transparent_png(art, ns)
-    write_png(png_path, rgba)
+    if ns.export_transparent:
+        # Preserve both the original v7 and the new project naming conventions.
+        write_png(png_path, rgba)
+        write_png(ns.output / f"{path.stem}_transparent.png", rgba)
     if ns.preview:
         color = bytes.fromhex(ns.background[1:])
         bg = np.full((art.height, art.width, 3), (color[2], color[1], color[0]), np.uint8)
         a = rgba[:, :, 3:4].astype(np.float32)/255.
         composite = np.uint8(np.round(rgba[:, :, :3]*a + bg*(1-a)))
         write_png(ns.output / f"{path.stem}_preview.png", composite)
+        write_png(ns.output / f"{path.stem}_art.png", composite)
     if ns.debug:
         write_png(ns.output / f"{path.stem}_mask.png", mask)
         dark, light, _ = _tone_maps(image[:, :, :3], mask)
         write_png(ns.output / f"{path.stem}_tone.png", np.uint8(np.clip(dark*.8+light*.2, 0, 1)*255))
-    return {"svg": svg_path, "png": png_path,
+    return {"svg": svg_path, "png": png_path if ns.export_transparent else None,
             "cuts": len(art.layers[-1][1]), "outline": len(art.layers[0][1])}
 
 
@@ -452,7 +458,8 @@ def main(argv: list[str] | None = None) -> int:
         for file in files:
             try:
                 result = process(file, ns)
-                print(f"[OK] {file.name}: {result['svg']} + {result['png']} "
+                print(f"[OK] {file.name}: {result['svg']}"
+                      f"{(' + ' + str(result['png'])) if result['png'] else ''} "
                       f"(outline={result['outline']}, cuts={result['cuts']})")
             except (ValueError, cv2.error, OSError) as exc:
                 failed += 1

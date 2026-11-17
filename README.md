@@ -43,14 +43,18 @@ python photo_to_svg.py
 Files are saved to `output/`:
 
 - `photo.svg` — editable vector paths, transparent background
-- `photo_transparent.png` — transparent raster image containing only ink strokes
-- `photo_preview.png` — ink on a dark preview background
+- `photo_art_transparent.png` — transparent raster image containing only ink strokes
+- `photo_art.png` — ink on a dark preview background
+- `photo_transparent.png` and `photo_preview.png` — equivalent filenames retained for compatibility
 
 The folders and their contents are intentionally not committed to Git.
 
 ## Examples (terminal commands)
 
 ```bash
+# Your original v7 command works unchanged (PowerShell: keep it on one line)
+python photo_to_svg.py --input input/cornicello.jpg --output output --preset balanced --style accent --accent-local-density 4.2 --outline-style cut --outline-cut-density 1.6 --outline-cut-length 11 --export-transparent --svg-background
+
 # One photo, default style
 python photo_to_svg.py --input "photos/pepper.jpg" --output output
 
@@ -77,6 +81,9 @@ python photo_to_svg.py --input photos/pepper.jpg --stroke "#B1A38A" --background
 
 # Add an actual background rectangle to the SVG only
 python photo_to_svg.py --input photos/pepper.jpg --svg-background
+
+# Disable exporting the transparent PNG when you only need the SVG and preview
+python photo_to_svg.py --input photos/pepper.jpg --no-export-transparent
 
 # Detailed object, higher processing resolution
 python photo_to_svg.py --input photos/object.jpg --max-side 2400 --preset detailed

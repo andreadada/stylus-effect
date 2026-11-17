@@ -21,6 +21,17 @@ class EngravingTests(unittest.TestCase):
         self.assertEqual(self.args.style, 'accent')
         self.assertEqual(self.args.accent_local_density, 4.2)
         self.assertEqual(self.args.outline_style, 'cut')
+        self.assertTrue(self.args.export_transparent)
+        legacy = engrave.build_parser().parse_args([
+            '--input', 'input/cornicello.jpg', '--output', 'output',
+            '--preset', 'balanced', '--style', 'accent',
+            '--accent-local-density', '4.2', '--outline-style', 'cut',
+            '--outline-cut-density', '1.6', '--outline-cut-length', '11',
+            '--export-transparent', '--svg-background',
+        ])
+        engrave.validate(legacy)
+        self.assertTrue(legacy.export_transparent)
+        self.assertTrue(legacy.svg_background)
 
     def test_white_segment_and_select_one_component(self):
         mask = engrave.make_mask(self.image, self.args)
@@ -68,6 +79,24 @@ class EngravingTests(unittest.TestCase):
             self.assertTrue(result['svg'].is_file())
             self.assertTrue(result['png'].is_file())
             self.assertTrue((base / 'out' / 'input_preview.png').is_file())
+            self.assertTrue((base / 'out' / 'input_art_transparent.png').is_file())
+            self.assertTrue((base / 'out' / 'input_art.png').is_file())
+            self.assertTrue((base / 'out' / 'input_transparent.png').is_file())
+
+    def test_disable_transparent_export(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            source = base / 'input.png'
+            engrave.write_png(source, self.image)
+            args = engrave.build_parser().parse_args([
+                '--input', str(source), '--output', str(base / 'out'),
+                '--no-export-transparent',
+            ])
+            result = engrave.process(source, args)
+            self.assertIsNone(result['png'])
+            self.assertFalse((base / 'out' / 'input_art_transparent.png').exists())
+            self.assertFalse((base / 'out' / 'input_transparent.png').exists())
+            self.assertTrue((base / 'out' / 'input_preview.png').exists())
 
     def test_validation(self):
         for flag, value in [('--accent-local-density', '9'), ('--outline-jitter', '-1'), ('--stroke', 'red')]:
