@@ -1,0 +1,21 @@
+# Local photos and generated assets: NEVER commit these
+input/
+output/
+*.svg
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.bmp
+*.tif
+*.tiff
+
+# Python / IDE
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store
