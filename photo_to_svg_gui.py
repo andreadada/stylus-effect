@@ -1,241 +1,268 @@
 #!/usr/bin/env python3
-"""Tkinter GUI; the fields are generated from photo_to_svg.build_parser()."""
 from __future__ import annotations
 
 import argparse
-import os
-import shlex
 import subprocess
 import sys
-import threading
-import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, ttk
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
-from PIL import Image, ImageTk
-import photo_to_svg
+import photo_to_svg as core
 
-# Only slider *ranges* are configured here. Option names/defaults/types/choices
-# always come from photo_to_svg.build_parser(), not from a second CLI definition.
-SLIDERS = {
-    "accent_local_density": (1, 6, .1), "accent_density": (0, 2, .05),
-    "accent_clusters": (1, 20, 1), "accent_spacing": (5, 100, 1),
-    "accent_length": (3, 70, 1), "accent_jitter": (0, 1, .01),
-    "accent_inner_lines": (0, 4, 1), "outline_cut_density": (.2, 4, .1),
-    "outline_cut_length": (3, 80, 1), "outline_jitter": (0, 1, .01),
-    "stroke_width": (.2, 5, .1), "grabcut_margin": (.02, .4, .01),
-    "max_side": (200, 3000, 100),
+RANGES = {
+    'max_side': (0, 4000, 50),
+    'grabcut_margin': (0.02, 0.4, 0.01),
+    'stroke_width': (0.1, 6.0, 0.1),
+    'opacity': (0.0, 1.0, 0.01),
+    'detail_width': (0.1, 4.0, 0.05),
+    'detail_opacity': (0.0, 1.0, 0.01),
+    'highlight_width': (0.1, 4.0, 0.05),
+    'highlight_opacity': (0.0, 1.0, 0.01),
+    'hatch_angle': (-90.0, 90.0, 1.0),
+    'hatch_spacing': (3.0, 80.0, 0.5),
+    'hatch_length': (2.0, 120.0, 0.5),
+    'hatch_density': (0.0, 3.0, 0.05),
+    'hatch_width': (0.1, 4.0, 0.05),
+    'hatch_opacity': (0.0, 1.0, 0.01),
+    'accent_density': (0.0, 2.0, 0.05),
+    'accent_spacing': (5.0, 100.0, 0.5),
+    'accent_local_density': (1.0, 6.0, 0.1),
+    'accent_length': (3.0, 70.0, 0.5),
+    'accent_jitter': (0.0, 1.0, 0.01),
+    'accent_border_weight': (0.0, 1.0, 0.01),
+    'accent_inner_lines': (0, 4, 1),
+    'accent_clusters': (1, 12, 1),
+    'accent_width': (0.1, 4.0, 0.05),
+    'outline_cut_density': (0.2, 4.0, 0.05),
+    'outline_cut_length': (3.0, 80.0, 0.5),
+    'outline_jitter': (0.0, 1.0, 0.01),
 }
 
-
 class App(tk.Tk):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.title("Stylus Effect — Engraving Studio")
-        self.geometry("1160x810")
-        self.parser = photo_to_svg.build_parser()
-        self.controls: dict[str, tk.Variable] = {}
-        self.preview_photo = None
-        self.busy = False
-        self._create_ui()
+        self.title('Photo to SVG — GUI')
+        self.geometry('1160x860')
+        self.parser = core.build_parser()
+        self.defaults = vars(core.parse_args([]))
+        self.widgets = {}
+        self.action_map = {}
+        self._build()
 
-    def _create_ui(self):
-        top = ttk.Frame(self, padding=12)
-        top.pack(fill="x")
-        ttk.Label(top, text="Stylus Effect", font=("Segoe UI", 19, "bold")).pack(side="left")
-        ttk.Label(top, text=" ·  Pencil / contour engraving", foreground="gray").pack(side="left")
-        ttk.Button(top, text="Select photo", command=self._choose_photo).pack(side="right")
+    def _build(self) -> None:
+        top = ttk.Frame(self, padding=10)
+        top.pack(fill='x')
+        ttk.Label(top, text='Photo to SVG GUI', font=('Segoe UI', 16, 'bold')).pack(anchor='w')
+        ttk.Label(top, text='Controlli generati automaticamente dagli argomenti di photo_to_svg.py').pack(anchor='w', pady=(2, 8))
 
-        split = ttk.Panedwindow(self, orient="horizontal")
-        split.pack(fill="both", expand=True, padx=10, pady=5)
-        left = ttk.Frame(split)
-        right = ttk.Frame(split, padding=(10, 2))
-        split.add(left, weight=3)
-        split.add(right, weight=2)
+        main = ttk.Panedwindow(self, orient='horizontal')
+        main.pack(fill='both', expand=True)
 
-        notebook = ttk.Notebook(left)
-        notebook.pack(fill="both", expand=True)
-        for group in self.parser._action_groups:
-            actions = [a for a in group._group_actions if a.dest != "help"]
-            if not actions:
+        left_wrap = ttk.Frame(main)
+        right = ttk.Frame(main, padding=10)
+        main.add(left_wrap, weight=3)
+        main.add(right, weight=2)
+
+        canvas = tk.Canvas(left_wrap, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(left_wrap, orient='vertical', command=canvas.yview)
+        self.form = ttk.Frame(canvas, padding=8)
+        self.form.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.create_window((0, 0), window=self.form, anchor='nw')
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+
+        sections = {
+            'Input / Output': {'input', 'output', 'preset', 'mode', 'style', 'max_side', 'preview', 'debug'},
+            'Mask & segmentation': {'mask', 'grabcut', 'grabcut_margin', 'auto_mask'},
+            'Linee base': {'stroke', 'stroke_width', 'opacity', 'detail_width', 'detail_opacity', 'highlight_width', 'highlight_opacity'},
+            'Adaptive hatching': {'hatching', 'hatch_tone', 'hatch_region', 'hatch_flow', 'hatch_angle', 'hatch_spacing', 'hatch_length', 'hatch_density', 'hatch_width', 'hatch_opacity', 'hatch_seed'},
+            'Accent style': {'accent_region', 'accent_follow', 'accent_density', 'accent_spacing', 'accent_local_density', 'accent_length', 'accent_jitter', 'accent_border_weight', 'accent_inner_lines', 'accent_clusters', 'accent_width', 'accent_seed'},
+            'Outline / export': {'outline_style', 'outline_cut_density', 'outline_cut_length', 'outline_jitter', 'export_transparent', 'svg_background', 'background'},
+        }
+        used = set()
+        row = 0
+        for title, names in sections.items():
+            lf = ttk.LabelFrame(self.form, text=title, padding=8)
+            lf.grid(row=row, column=0, sticky='ew', pady=6)
+            lf.columnconfigure(1, weight=1)
+            self._populate_section(lf, names)
+            used |= names
+            row += 1
+        remaining = [a for a in self.parser._actions if getattr(a, 'dest', None) not in used and a.dest not in ('help',)]
+        if remaining:
+            lf = ttk.LabelFrame(self.form, text='Other', padding=8)
+            lf.grid(row=row, column=0, sticky='ew', pady=6)
+            lf.columnconfigure(1, weight=1)
+            self._populate_actions(lf, remaining)
+
+        cmd_frame = ttk.LabelFrame(right, text='Comando generato', padding=8)
+        cmd_frame.pack(fill='x')
+        self.command_var = tk.StringVar()
+        ttk.Entry(cmd_frame, textvariable=self.command_var).pack(fill='x')
+
+        btns = ttk.Frame(right)
+        btns.pack(fill='x', pady=8)
+        ttk.Button(btns, text='Aggiorna comando', command=self.update_command).pack(side='left')
+        ttk.Button(btns, text='Esegui', command=self.run_command).pack(side='left', padx=6)
+        ttk.Button(btns, text='Reset default', command=self.reset_defaults).pack(side='left')
+
+        info = ttk.LabelFrame(right, text='Output', padding=8)
+        info.pack(fill='both', expand=True)
+        self.log = ScrolledText(info, height=30)
+        self.log.pack(fill='both', expand=True)
+
+        self.update_command()
+
+    def _populate_section(self, frame: ttk.LabelFrame, names: set[str]) -> None:
+        actions = [a for a in self.parser._actions if getattr(a, 'dest', None) in names]
+        self._populate_actions(frame, actions)
+
+    def _populate_actions(self, frame, actions):
+        row = 0
+        for action in actions:
+            dest = action.dest
+            if dest == 'help':
                 continue
-            page = ttk.Frame(notebook, padding=8)
-            notebook.add(page, text=group.title)
-            canvas = tk.Canvas(page, highlightthickness=0)
-            scroll = ttk.Scrollbar(page, orient="vertical", command=canvas.yview)
-            inner = ttk.Frame(canvas, padding=5)
-            inner.bind("<Configure>", lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")))
-            canvas.create_window((0, 0), window=inner, anchor="nw")
-            canvas.configure(yscrollcommand=scroll.set)
-            canvas.pack(side="left", fill="both", expand=True)
-            scroll.pack(side="right", fill="y")
-            inner.columnconfigure(1, weight=1)
-            for row, action in enumerate(actions):
-                self._add_control(inner, row, action)
+            self.action_map[dest] = action
+            ttk.Label(frame, text=dest.replace('_', ' ')).grid(row=row, column=0, sticky='w', padx=(0, 8), pady=4)
+            widget = self._make_widget(frame, action, row)
+            self.widgets[dest] = widget
+            row += 1
 
-        ttk.Label(right, text="Preview", font=("Segoe UI", 12, "bold")).pack(anchor="w")
-        self.preview = ttk.Label(right, text="Generate an image to see the preview", anchor="center")
-        self.preview.pack(fill="both", expand=True, pady=(5, 12))
-
-        toolbar = ttk.Frame(right)
-        toolbar.pack(fill="x", pady=(0, 8))
-        self.run_button = ttk.Button(toolbar, text="Generate SVG + PNG", command=self._run)
-        self.run_button.pack(side="left")
-        ttk.Button(toolbar, text="Reset", command=self._reset).pack(side="left", padx=5)
-        ttk.Button(toolbar, text="Open output", command=self._open_output).pack(side="left")
-
-        ttk.Label(right, text="Command (updates automatically)").pack(anchor="w")
-        self.command = tk.StringVar()
-        ttk.Entry(right, textvariable=self.command, state="readonly").pack(fill="x", pady=(3, 8))
-        self.log = ScrolledText(right, height=8, wrap="word", state="disabled")
-        self.log.pack(fill="x")
-        self._update_command()
-
-    def _add_control(self, parent, row, action):
+    def _make_widget(self, frame, action, row):
         dest = action.dest
-        label = dest.replace("_", " ")
-        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=8)
-        if isinstance(action, (argparse._StoreTrueAction, argparse.BooleanOptionalAction)):
-            var = tk.BooleanVar(value=bool(action.default))
-            ttk.Checkbutton(parent, variable=var).grid(row=row, column=1, sticky="w")
-        elif action.choices:
-            var = tk.StringVar(value=str(action.default))
-            ttk.Combobox(parent, textvariable=var, values=list(action.choices),
-                         state="readonly").grid(row=row, column=1, sticky="ew")
-        elif dest in SLIDERS:
-            lo, hi, step = SLIDERS[dest]
-            var = tk.IntVar(value=int(action.default)) if action.type is int else tk.DoubleVar(value=float(action.default))
-            frame = ttk.Frame(parent)
-            frame.grid(row=row, column=1, sticky="ew")
-            frame.columnconfigure(0, weight=1)
-            tk.Scale(frame, from_=lo, to=hi, resolution=step, variable=var, orient="horizontal",
-                     showvalue=False).grid(row=0, column=0, sticky="ew")
-            ttk.Entry(frame, textvariable=var, width=9).grid(row=0, column=1, padx=5)
-        else:
-            var = tk.StringVar(value="" if action.default is None else str(action.default))
-            frame = ttk.Frame(parent)
-            frame.grid(row=row, column=1, sticky="ew")
-            frame.columnconfigure(0, weight=1)
-            ttk.Entry(frame, textvariable=var).grid(row=0, column=0, sticky="ew")
-            if action.type is Path:
-                ttk.Button(frame, text="...", width=3,
-                           command=lambda d=dest, v=var: self._browse(d, v)).grid(row=0, column=1, padx=4)
-        self.controls[dest] = var
-        var.trace_add("write", lambda *_: self._update_command())
+        default = self.defaults.get(dest)
+        if isinstance(action, argparse._StoreTrueAction):
+            var = tk.BooleanVar(value=bool(default))
+            w = ttk.Checkbutton(frame, variable=var, command=self.update_command)
+            w.var = var
+            w.grid(row=row, column=1, sticky='w')
+            return w
+        if isinstance(action, argparse.BooleanOptionalAction):
+            var = tk.BooleanVar(value=bool(default))
+            w = ttk.Checkbutton(frame, variable=var, command=self.update_command)
+            w.var = var
+            w.grid(row=row, column=1, sticky='w')
+            return w
+        if action.choices:
+            var = tk.StringVar(value=str(default))
+            w = ttk.Combobox(frame, textvariable=var, values=list(action.choices), state='readonly')
+            w.bind('<<ComboboxSelected>>', lambda e: self.update_command())
+            w.grid(row=row, column=1, sticky='ew')
+            w.var = var
+            return w
+        if action.type in (int, float):
+            holder = ttk.Frame(frame)
+            holder.grid(row=row, column=1, sticky='ew')
+            holder.columnconfigure(1, weight=1)
+            var = tk.DoubleVar(value=float(default) if default is not None else 0.0)
+            if action.type is int:
+                var = tk.IntVar(value=int(default) if default is not None else 0)
+            if dest in RANGES:
+                lo, hi, step = RANGES[dest]
+                scale = tk.Scale(holder, from_=lo, to=hi, orient='horizontal', resolution=step,
+                                 variable=var, command=lambda _=None: self.update_command())
+                scale.grid(row=0, column=0, sticky='ew')
+            entry = ttk.Entry(holder, textvariable=var, width=10)
+            entry.grid(row=0, column=1, padx=(6, 0))
+            entry.bind('<KeyRelease>', lambda e: self.update_command())
+            holder.var = var
+            return holder
+        var = tk.StringVar(value='' if default is None else str(default))
+        holder = ttk.Frame(frame)
+        holder.grid(row=row, column=1, sticky='ew')
+        holder.columnconfigure(0, weight=1)
+        entry = ttk.Entry(holder, textvariable=var)
+        entry.grid(row=0, column=0, sticky='ew')
+        entry.bind('<KeyRelease>', lambda e: self.update_command())
+        if action.type is Path or dest in ('input', 'output', 'mask'):
+            def browse():
+                current = var.get().strip()
+                if dest == 'output':
+                    chosen = filedialog.askdirectory(initialdir=current or '.')
+                elif dest == 'mask':
+                    chosen = filedialog.askopenfilename(initialdir=str(Path(current).parent) if current else '.', filetypes=[('Images', '*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff'), ('All files', '*.*')])
+                else:
+                    chosen = filedialog.askopenfilename(initialdir=str(Path(current).parent) if current else '.', filetypes=[('Images', '*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff'), ('All files', '*.*')])
+                    if not chosen:
+                        chosen = filedialog.askdirectory(initialdir=current or '.')
+                if chosen:
+                    var.set(chosen)
+                    self.update_command()
+            ttk.Button(holder, text='Browse', command=browse).grid(row=0, column=1, padx=(6, 0))
+        holder.var = var
+        return holder
 
-    def _browse(self, dest, var):
-        if dest == "output":
-            result = filedialog.askdirectory()
-        elif dest == "input":
-            result = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff")])
-            if not result:
-                result = filedialog.askdirectory()
-        else:
-            result = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg"), ("All", "*.*")])
-        if result:
-            var.set(result)
+    def _value_of(self, dest):
+        w = self.widgets[dest]
+        return w.var.get()
 
-    def _choose_photo(self):
-        self._browse("input", self.controls["input"])
-
-    def _arguments(self) -> list[str]:
-        args = []
+    def build_argv(self):
+        argv = []
         for action in self.parser._actions:
-            if action.dest == "help" or action.dest not in self.controls:
+            dest = getattr(action, 'dest', None)
+            if not dest or dest == 'help' or dest not in self.widgets:
                 continue
-            raw = self.controls[action.dest].get()
-            opt = next((s for s in action.option_strings if s.startswith("--") and not s.startswith("--no-")), None)
-            if opt is None:
-                continue
+            value = self._value_of(dest)
+            default = self.defaults.get(dest)
+            option = action.option_strings[0] if action.option_strings else None
             if isinstance(action, argparse._StoreTrueAction):
-                if raw:
-                    args.append(opt)
-            elif isinstance(action, argparse.BooleanOptionalAction):
-                if raw != action.default:
-                    args.append(opt if raw else "--no-" + action.dest.replace("_", "-"))
-            elif raw != "" and raw is not None:
-                # Pass all current numeric/string settings; argparse validates them.
-                args.extend((opt, str(raw)))
-        return args
+                if value:
+                    argv.append(option)
+                continue
+            if isinstance(action, argparse.BooleanOptionalAction):
+                if value != default:
+                    argv.append(option if value else '--no-' + dest.replace('_', '-'))
+                continue
+            if value in ('', None):
+                continue
+            normalized = str(value)
+            if action.type is int:
+                normalized = str(int(float(value)))
+            elif action.type is float:
+                normalized = str(float(value))
+            if str(default) != normalized:
+                argv.extend([option, normalized])
+        return argv
 
-    def _update_command(self):
-        if not hasattr(self, "command"):
-            return
+    def update_command(self):
+        argv = self.build_argv()
+        self.command_var.set('python photo_to_svg.py ' + ' '.join(argv))
+
+    def reset_defaults(self):
+        self.defaults = vars(core.parse_args([]))
+        for dest, widget in self.widgets.items():
+            value = self.defaults.get(dest)
+            try:
+                widget.var.set(value)
+            except Exception:
+                pass
+        self.update_command()
+
+    def run_command(self):
+        script = Path(__file__).with_name('photo_to_svg.py')
+        argv = [sys.executable, str(script), *self.build_argv()]
+        self.update_command()
+        self.log.delete('1.0', 'end')
+        self.log.insert('end', '$ ' + ' '.join(argv) + '\n\n')
+        self.update()
         try:
-            parts = ["python", "photo_to_svg.py", *self._arguments()]
-            self.command.set(subprocess.list2cmdline(parts) if os.name == "nt" else shlex.join(parts))
-        except (ValueError, tk.TclError):
-            self.command.set("Finish editing a value to generate the command")
-
-    def _append_log(self, message):
-        self.log.configure(state="normal")
-        self.log.insert("end", message + "\n")
-        self.log.see("end")
-        self.log.configure(state="disabled")
-
-    def _run(self):
-        if self.busy:
+            proc = subprocess.run(argv, capture_output=True, text=True, cwd=script.parent)
+        except Exception as exc:
+            messagebox.showerror('Errore', str(exc))
             return
-        try:
-            args = self._arguments()
-        except (ValueError, tk.TclError) as exc:
-            self._append_log(f"Invalid setting: {exc}")
-            return
-        self.busy = True
-        self.run_button.configure(state="disabled")
-        self._append_log("Running…")
-        thread = threading.Thread(target=self._worker, args=(args,), daemon=True)
-        thread.start()
-
-    def _worker(self, args):
-        script = Path(__file__).resolve().with_name("photo_to_svg.py")
-        try:
-            result = subprocess.run([sys.executable, str(script), *args], cwd=script.parent,
-                                    text=True, capture_output=True, errors="replace")
-            output = (result.stdout + "\n" + result.stderr).strip()
-            self.after(0, self._finish, result.returncode, output)
-        except OSError as exc:
-            self.after(0, self._finish, 1, str(exc))
-
-    def _finish(self, code, output):
-        self.busy = False
-        self.run_button.configure(state="normal")
-        self._append_log(output or ("Done" if code == 0 else "No output"))
-        if code != 0:
-            return
-        source = Path(str(self.controls["input"].get()))
-        target = Path(str(self.controls["output"].get()))
-        if not target.is_absolute():
-            target = Path(__file__).resolve().parent / target
-        if source.is_file():
-            path = target / (source.stem + "_preview.png")
-            if path.is_file():
-                try:
-                    with Image.open(path) as img:
-                        img.thumbnail((470, 420))
-                        self.preview_photo = ImageTk.PhotoImage(img.copy())
-                    self.preview.configure(image=self.preview_photo, text="")
-                except OSError as exc:
-                    self._append_log(f"Preview unavailable: {exc}")
-
-    def _open_output(self):
-        target = Path(str(self.controls["output"].get())).resolve()
-        if not target.exists():
-            self._append_log("Generate artwork first to create the output folder")
-            return
-        if os.name == "nt":
-            os.startfile(str(target))
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(target)])
+        if proc.stdout:
+            self.log.insert('end', proc.stdout)
+        if proc.stderr:
+            self.log.insert('end', '\n[stderr]\n' + proc.stderr)
+        self.log.see('end')
+        if proc.returncode == 0:
+            messagebox.showinfo('Fatto', 'Elaborazione completata.')
         else:
-            subprocess.Popen(["xdg-open", str(target)])
+            messagebox.showwarning('Attenzione', f'Comando terminato con codice {proc.returncode}.')
 
-    def _reset(self):
-        for action in self.parser._actions:
-            if action.dest in self.controls:
-                self.controls[action.dest].set(action.default if action.default is not None else "")
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     App().mainloop()
